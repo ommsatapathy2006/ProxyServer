@@ -1,0 +1,12 @@
+build/
+proxy
+*.o
+*.d
+*.out
+logs/*.log
+!logs/.gitkeep
+core
+vgcore.*
+.vscode/
+.DS_Store
+*.swp

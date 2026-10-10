@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "http_handler.h"
-
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>

@@ -8,26 +8,19 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
 #include "http_handler.h"
-
 static int g_pass = 0, g_fail = 0;
-
 #define CHECK(cond)                                                          \
     do {                                                                     \
         if (cond) g_pass++;                                                  \
         else { g_fail++; printf("    FAIL line %d: %s\n", __LINE__, #cond); } \
     } while (0)
-
 #define TEST(name) printf("[test] %s\n", name)
-
 static http_request_t R;
-
 static int parse(const char *s)
 {
     return http_parse_request(s, strlen(s), &R);
 }
-
 static void test_parse_absolute_get(void)
 {
     TEST("parse: absolute-form GET");
@@ -42,7 +35,6 @@ static void test_parse_absolute_get(void)
     CHECK(R.content_length == -1);
     CHECK(R.header_count == 2);
 }
-
 static void test_parse_port_and_bare_host(void)
 {
     TEST("parse: explicit port, empty path, query without path");
@@ -55,7 +47,6 @@ static void test_parse_port_and_bare_host(void)
     CHECK(parse("GET http://example.com?a=b HTTP/1.1\r\n\r\n") == 0);
     CHECK(strcmp(R.path, "/?a=b") == 0);
 }
-
 static void test_parse_origin_form(void)
 {
     TEST("parse: origin-form uses the Host header");
@@ -65,25 +56,20 @@ static void test_parse_origin_form(void)
 
     CHECK(parse("GET /a/b HTTP/1.1\r\nAccept: */*\r\n\r\n") == 400);
 }
-
 static void test_parse_connect(void)
 {
     TEST("parse: CONNECT");
     CHECK(parse("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n") == 0);
     CHECK(R.is_connect == 1);
     CHECK(strcmp(R.host, "example.com") == 0 && R.port == 443);
-
     CHECK(parse("CONNECT [::1]:8443 HTTP/1.1\r\n\r\n") == 0);
     CHECK(strcmp(R.host, "::1") == 0 && R.port == 8443);
-
     CHECK(parse("CONNECT example.com HTTP/1.1\r\n\r\n") == 0);
     CHECK(R.port == 443);
-
     CHECK(parse("CONNECT example.com:99999 HTTP/1.1\r\n\r\n") == 400);
     CHECK(parse("CONNECT example.com:abc HTTP/1.1\r\n\r\n") == 400);
     CHECK(parse("CONNECT :443 HTTP/1.1\r\n\r\n") == 400);
 }
-
 static void test_parse_headers(void)
 {
     TEST("parse: headers, case-insensitive lookup, Content-Length");
@@ -93,13 +79,11 @@ static void test_parse_headers(void)
     CHECK(http_get_header(&R, "Content-Length") != NULL);
     CHECK(strcmp(http_get_header(&R, "x-test"), "a: b") == 0);
     CHECK(http_get_header(&R, "Missing") == NULL);
-
     CHECK(parse("POST http://h/ HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\n") == 0);
     CHECK(parse("POST http://h/ HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n") == 400);
     CHECK(parse("POST http://h/ HTTP/1.1\r\nContent-Length: -1\r\n\r\n") == 400);
     CHECK(parse("POST http://h/ HTTP/1.1\r\nContent-Length: 12abc\r\n\r\n") == 400);
 }
-
 static void test_parse_malformed(void)
 {
     TEST("parse: malformed input -> 400 (never crashes)");
@@ -120,11 +104,9 @@ static void test_parse_malformed(void)
     CHECK(parse("GET hello HTTP/1.1\r\n\r\n") == 400);
     CHECK(http_parse_request("GET http://h/ HTTP/1.1\r\n\r\n", 2, &R) == 400);
     CHECK(http_parse_request("", 0, &R) == 400);
-
     char nul[] = "GET http://h/ HTTP/1.1\r\nA: b\0c\r\n\r\n";
     CHECK(http_parse_request(nul, sizeof nul - 1, &R) == 400);
 }
-
 static void test_parse_unsupported(void)
 {
     TEST("parse: unsupported method / chunked upload -> 501");
@@ -134,7 +116,6 @@ static void test_parse_unsupported(void)
     CHECK(parse("HEAD http://h/ HTTP/1.1\r\n\r\n") == 0);
     CHECK(parse("GET http://h/ HTTP/1.0\r\n\r\n") == 0);
 }
-
 static void test_parse_limits(void)
 {
     TEST("parse: oversized fields are rejected, not overflowed");
@@ -144,22 +125,18 @@ static void test_parse_limits(void)
     n += MAX_URL_LEN + 10;
     n += snprintf(big + n, sizeof big - (size_t)n, " HTTP/1.1\r\n\r\n");
     CHECK(http_parse_request(big, (size_t)n, &R) == 400);
-
     n = snprintf(big, sizeof big, "GET http://h/ HTTP/1.1\r\nX: ");
     memset(big + n, 'b', MAX_HEADER_VALUE + 10);
     n += MAX_HEADER_VALUE + 10;
     n += snprintf(big + n, sizeof big - (size_t)n, "\r\n\r\n");
     CHECK(http_parse_request(big, (size_t)n, &R) == 400);
-
     n = snprintf(big, sizeof big, "GET http://h/ HTTP/1.1\r\n");
     for (int i = 0; i < MAX_HEADERS + 5; i++)
         n += snprintf(big + n, sizeof big - (size_t)n, "H%d: v\r\n", i);
     n += snprintf(big + n, sizeof big - (size_t)n, "\r\n");
     CHECK(http_parse_request(big, (size_t)n, &R) == 400);
 }
-
 typedef struct { int fd; int status; http_response_t resp; } proxy_t;
-
 static void *proxy_thread(void *arg)
 {
     proxy_t *p = arg;
@@ -167,7 +144,6 @@ static void *proxy_thread(void *arg)
     close(p->fd);
     return NULL;
 }
-
 static int start_proxy(proxy_t *p, pthread_t *th)
 {
     int sv[2];
@@ -179,7 +155,6 @@ static int start_proxy(proxy_t *p, pthread_t *th)
     pthread_create(th, NULL, proxy_thread, p);
     return sv[1];
 }
-
 static size_t read_all(int fd, char *out, size_t cap)
 {
     size_t n = 0;
@@ -191,12 +166,10 @@ static size_t read_all(int fd, char *out, size_t cap)
     out[n] = '\0';
     return n;
 }
-
 static void write_str(int fd, const char *s)
 {
     if (send(fd, s, strlen(s), MSG_NOSIGNAL) < 0) perror("send");
 }
-
 static int listen_local(int *port)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0), one = 1;

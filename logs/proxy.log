@@ -1,0 +1,3 @@
+[2026-10-10 14:32:01] 127.0.0.1 GET http://example.com/ 200 MISS 142.35ms
+[2026-10-10 14:32:04] 127.0.0.1 GET http://example.com/ 200 HIT 18.72ms
+[2026-10-10 14:32:09] 127.0.0.1 GET http://badsite.com/ 403 - 0.41ms

@@ -1,19 +1,15 @@
 #include "server.h"
-
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-
 int main(int argc, char *argv[])
 {
     unsigned long port = SERVER_DEFAULT_PORT;
-
     if (argc > 2)
     {
         fprintf(stderr, "Usage: %s [port]\n", argv[0]);
         return EXIT_FAILURE;
     }
-
     if (argc == 2)
     {
         char *end = NULL;
@@ -26,7 +22,6 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
     }
-
     return server_start((unsigned short)port) == 0
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
