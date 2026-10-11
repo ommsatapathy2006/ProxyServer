@@ -1,8 +1,6 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-/* Thread-safe request logger for the Proxy Server project. */
-
 int init_logger(const char *filename);
 
 void log_request(

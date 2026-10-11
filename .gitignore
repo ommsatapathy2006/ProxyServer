@@ -1,0 +1,5 @@
+*.o
+proxy
+tests/test_cache
+tests/test_http_handler
+logs/*.log

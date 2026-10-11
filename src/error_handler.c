@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "include/error_handler.h"
+#include "error_handler.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +9,13 @@
 static const char *reason_phrase(int status_code)
 {
     switch (status_code) {
+        case 200: return "OK";
+        case 304: return "Not Modified";
         case 400: return "Bad Request";
+        case 403: return "Forbidden";
+        case 408: return "Request Timeout";
+        case 429: return "Too Many Requests";
+        case 501: return "Not Implemented";
         case 502: return "Bad Gateway";
         case 504: return "Gateway Timeout";
         default:  return "Proxy Error";
@@ -33,7 +39,7 @@ int send_error_response(
     body_len = snprintf(
         body,
         sizeof(body),
-        "<html><body><h1>%d %s</h1><p>%s</p></body></html>\\r\\n",
+        "<html><body><h1>%d %s</h1><p>%s</p></body></html>\r\n",
         status_code,
         reason_phrase(status_code),
         message
@@ -46,11 +52,11 @@ int send_error_response(
     response_len = snprintf(
         response,
         sizeof(response),
-        "HTTP/1.1 %d %s\\r\\n"
-        "Content-Type: text/html\\r\\n"
-        "Content-Length: %d\\r\\n"
-        "Connection: close\\r\\n"
-        "\\r\\n"
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: close\r\n"
+        "\r\n"
         "%s",
         status_code,
         reason_phrase(status_code),

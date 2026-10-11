@@ -1,8 +1,14 @@
 #include "server.h"
+#include "access_control.h"
+#include "logger.h"
+#include "cache.h"
+#include "common.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 int main(int argc, char *argv[])
 {
@@ -27,7 +33,13 @@ int main(int argc, char *argv[])
         }
     }
 
-    return server_start((unsigned short)port) == 0
-               ? EXIT_SUCCESS
-               : EXIT_FAILURE;
+    mkdir("logs", 0755);
+    access_control_init(CONFIG_FILE_PATH);
+    cache_init();
+    init_logger(LOG_FILE_PATH);
+
+    int result = server_start((unsigned short)port);
+    close_logger();
+
+    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

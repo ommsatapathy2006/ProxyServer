@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-# Proxy Server performance test.
-# Measures:
-#   1) Direct request
-#   2) First request through proxy (expected cache MISS)
-#   3) Second request through proxy (expected cache HIT/revalidation)
-#
-# Usage:
-#   ./benchmark.sh <URL> <PROXY_HOST> <PROXY_PORT>
-#
-# Example:
-#   ./benchmark.sh http://example.com 127.0.0.1 8080
-
-URL="${1:-http://example.com}"
+URL="${1:-http://127.0.0.1:9091/index.html}"
 PROXY_HOST="${2:-127.0.0.1}"
 PROXY_PORT="${3:-8080}"
 PROXY="http://${PROXY_HOST}:${PROXY_PORT}"
@@ -50,5 +38,3 @@ echo
 run_proxy "3. Second request through proxy (cache HIT/revalidation expected)"
 
 echo
-echo "Repeat the test several times for more stable measurements."
-echo "Check proxy.log to correlate status, cache status and latency."

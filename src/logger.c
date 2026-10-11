@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "include/logger.h"
+#include "logger.h"
 
 #include <pthread.h>
 #include <stdio.h>
