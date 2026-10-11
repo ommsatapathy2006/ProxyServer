@@ -1,5 +1,15 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "http_handler.h"
+#include "access_control.h"
+#include "cache.h"
+#include "logger.h"
+#include "error_handler.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -13,6 +23,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 static int g_timeout_sec = HTTP_DEFAULT_TIMEOUT_SEC;
@@ -62,6 +73,7 @@ const char *http_status_text(int status)
 {
     switch (status) {
     case 200: return "OK";
+    case 304: return "Not Modified";
     case 400: return "Bad Request";
     case 403: return "Forbidden";
     case 408: return "Request Timeout";
@@ -75,18 +87,7 @@ const char *http_status_text(int status)
 
 void http_send_error(int fd, int status)
 {
-    char body[256], head[384];
-    int blen = snprintf(body, sizeof body,
-                        "<html><body><h1>%d %s</h1></body></html>\n",
-                        status, http_status_text(status));
-    int hlen = snprintf(head, sizeof head,
-                        "HTTP/1.1 %d %s\r\n"
-                        "Content-Type: text/html\r\n"
-                        "Content-Length: %d\r\n"
-                        "Connection: close\r\n\r\n",
-                        status, http_status_text(status), blen);
-    if (send_all(fd, head, (size_t)hlen) == 0)
-        send_all(fd, body, (size_t)blen);
+    send_error_response(fd, status, http_status_text(status));
 }
 
 static int fail(int client_fd, int upstream_fd, int status, http_response_t *resp)
@@ -227,7 +228,6 @@ static int resolve_target(const char *target, http_request_t *req)
     size_t tlen = strlen(target);
 
     if (req->is_connect) {
-
         if (parse_authority(target, tlen, 443, req->host, &req->port) != 0)
             return 400;
         req->path[0] = '\0';
@@ -235,7 +235,6 @@ static int resolve_target(const char *target, http_request_t *req)
     }
 
     if (strncasecmp(target, "http://", 7) == 0) {
-
         const char *auth = target + 7;
         size_t alen = strcspn(auth, "/?");
         const char *rest = auth + alen;
@@ -252,7 +251,6 @@ static int resolve_target(const char *target, http_request_t *req)
     }
 
     if (target[0] == '/') {
-
         const char *h = http_get_header(req, "Host");
         if (!h || parse_authority(h, strlen(h), 80, req->host, &req->port) != 0)
             return 400;
@@ -675,4 +673,246 @@ int http_handle_client(int client_fd, http_response_t *resp)
     return req.is_connect
         ? http_tunnel(client_fd, &req, extra, extra_len, resp)
         : http_forward(client_fd, &req, extra, extra_len, resp);
+}
+
+int handle_http_client(int client_fd, const char *client_ip)
+{
+    struct timespec t_start, t_end;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+
+    if (is_rate_limited(client_ip)) {
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        send_error_response(client_fd, 429, "Too Many Requests");
+        log_request(client_ip, "-", "-", 429, CACHE_STATUS_NONE, latency);
+        return 429;
+    }
+
+    set_timeouts(client_fd, g_timeout_sec);
+
+    char buf[MAX_REQUEST_HEADER_BYTES];
+    size_t head_len = 0, total_len = 0;
+
+    int rc = http_read_request_head(client_fd, buf, sizeof(buf), &head_len, &total_len);
+    if (rc < 0) {
+        return 0;
+    }
+    if (rc != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        send_error_response(client_fd, rc, http_status_text(rc));
+        log_request(client_ip, "-", "-", rc, CACHE_STATUS_NONE, latency);
+        return rc;
+    }
+
+    http_request_t req;
+    int perr = http_parse_request(buf, head_len, &req);
+    if (perr != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        send_error_response(client_fd, perr, http_status_text(perr));
+        log_request(client_ip, "-", "-", perr, CACHE_STATUS_NONE, latency);
+        return perr;
+    }
+
+    if (is_blocked(req.host)) {
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        send_error_response(client_fd, 403, "Forbidden");
+        log_request(client_ip, req.method, req.url, 403, CACHE_STATUS_NONE, latency);
+        return 403;
+    }
+
+    const char *extra = buf + head_len;
+    size_t extra_len = total_len - head_len;
+
+    if (req.is_connect) {
+        http_response_t resp;
+        int status = http_tunnel(client_fd, &req, extra, extra_len, &resp);
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        log_request(client_ip, "CONNECT", req.url, status, CACHE_STATUS_NONE, latency);
+        return status;
+    }
+
+    if (strcmp(req.method, "GET") == 0) {
+        CacheEntry entry;
+        int in_cache = cache_lookup(req.url, &entry);
+        if (in_cache) {
+            int up_err = 502;
+            int up = http_connect_upstream(req.host, req.port, &up_err);
+            if (up >= 0) {
+                char if_mod[64];
+                format_http_date(entry.last_fetched, if_mod, sizeof(if_mod));
+
+                char cond_req[MAX_REQUEST_HEADER_BYTES];
+                size_t crlen = 0;
+                appendf(cond_req, sizeof(cond_req), &crlen,
+                        "GET %s HTTP/1.1\r\nHost: %s\r\nIf-Modified-Since: %s\r\nConnection: close\r\n\r\n",
+                        req.path, req.host, if_mod);
+                send_all(up, cond_req, crlen);
+
+                char up_buf[BUFFER_SIZE];
+                size_t got = 0;
+                while (got < 12) {
+                    ssize_t r = recv(up, up_buf + got, sizeof(up_buf) - got, 0);
+                    if (r <= 0) break;
+                    got += (size_t)r;
+                }
+                int up_status = 502;
+                if (got >= 12 && strncmp(up_buf, "HTTP/1.", 7) == 0 && up_buf[8] == ' ') {
+                    up_status = (up_buf[9] - '0') * 100 + (up_buf[10] - '0') * 10 + (up_buf[11] - '0');
+                }
+
+                if (up_status == 304) {
+                    close(up);
+                    char ok_hdr[256];
+                    int ohlen = snprintf(ok_hdr, sizeof(ok_hdr),
+                                         "HTTP/1.1 200 OK\r\n"
+                                         "Content-Type: text/html\r\n"
+                                         "Content-Length: %zu\r\n"
+                                         "Connection: close\r\n\r\n",
+                                         entry.content_len);
+                    send_all(client_fd, ok_hdr, (size_t)ohlen);
+                    send_all(client_fd, entry.content, entry.content_len);
+                    clock_gettime(CLOCK_MONOTONIC, &t_end);
+                    double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                                     (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+                    log_request(client_ip, req.method, req.url, 200, CACHE_STATUS_HIT, latency);
+                    return 200;
+                }
+
+                if (up_status == 200) {
+                    send_all(client_fd, up_buf, got);
+                    char body_buf[MAX_CONTENT_LEN];
+                    size_t body_len = 0;
+                    char *hend = memmem(up_buf, got, "\r\n\r\n", 4);
+                    if (hend) {
+                        size_t init_body = got - (size_t)(hend + 4 - up_buf);
+                        if (init_body > sizeof(body_buf) - 1) init_body = sizeof(body_buf) - 1;
+                        memcpy(body_buf, hend + 4, init_body);
+                        body_len = init_body;
+                    }
+                    while (1) {
+                        char chunk[BUFFER_SIZE];
+                        ssize_t r = recv(up, chunk, sizeof(chunk), 0);
+                        if (r <= 0) break;
+                        send_all(client_fd, chunk, (size_t)r);
+                        if (body_len + (size_t)r < sizeof(body_buf) - 1) {
+                            memcpy(body_buf + body_len, chunk, (size_t)r);
+                            body_len += (size_t)r;
+                        }
+                    }
+                    close(up);
+                    if (body_len > 0) {
+                        cache_store(req.url, body_buf, body_len);
+                    }
+                    clock_gettime(CLOCK_MONOTONIC, &t_end);
+                    double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                                     (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+                    log_request(client_ip, req.method, req.url, 200, CACHE_STATUS_MISS, latency);
+                    return 200;
+                }
+                close(up);
+            }
+        }
+
+        int up_err = 502;
+        int up = http_connect_upstream(req.host, req.port, &up_err);
+        if (up < 0) {
+            clock_gettime(CLOCK_MONOTONIC, &t_end);
+            double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                             (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+            send_error_response(client_fd, up_err, http_status_text(up_err));
+            log_request(client_ip, req.method, req.url, up_err, CACHE_STATUS_MISS, latency);
+            return up_err;
+        }
+
+        char out[MAX_REQUEST_HEADER_BYTES * 2];
+        size_t olen = 0;
+        char hosthdr[MAX_HOST_LEN + 16];
+        int v6 = strchr(req.host, ':') != NULL;
+        if (req.port == 80)
+            snprintf(hosthdr, sizeof hosthdr, v6 ? "[%s]" : "%s", req.host);
+        else
+            snprintf(hosthdr, sizeof hosthdr, v6 ? "[%s]:%d" : "%s:%d", req.host, req.port);
+
+        appendf(out, sizeof out, &olen, "%s %s HTTP/1.1\r\nHost: %s\r\n", req.method, req.path, hosthdr);
+        for (int i = 0; i < req.header_count; i++) {
+            if (skip_header(req.headers[i].name))
+                continue;
+            appendf(out, sizeof out, &olen, "%s: %s\r\n", req.headers[i].name, req.headers[i].value);
+        }
+        appendf(out, sizeof out, &olen, "Connection: close\r\n\r\n");
+
+        if (send_all(up, out, olen) < 0) {
+            close(up);
+            clock_gettime(CLOCK_MONOTONIC, &t_end);
+            double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                             (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+            send_error_response(client_fd, 502, http_status_text(502));
+            log_request(client_ip, req.method, req.url, 502, CACHE_STATUS_MISS, latency);
+            return 502;
+        }
+
+        char up_buf[BUFFER_SIZE];
+        size_t got = 0;
+        while (got < 12) {
+            ssize_t r = recv(up, up_buf + got, sizeof up_buf - got, 0);
+            if (r <= 0) break;
+            got += (size_t)r;
+        }
+
+        int status = 502;
+        if (got >= 12 && strncmp(up_buf, "HTTP/1.", 7) == 0 && up_buf[8] == ' ') {
+            status = (up_buf[9] - '0') * 100 + (up_buf[10] - '0') * 10 + (up_buf[11] - '0');
+        }
+
+        send_all(client_fd, up_buf, got);
+
+        char body_buf[MAX_CONTENT_LEN];
+        size_t body_len = 0;
+        char *hend = memmem(up_buf, got, "\r\n\r\n", 4);
+        if (hend) {
+            size_t init_body = got - (size_t)(hend + 4 - up_buf);
+            if (init_body > sizeof(body_buf) - 1) init_body = sizeof(body_buf) - 1;
+            memcpy(body_buf, hend + 4, init_body);
+            body_len = init_body;
+        }
+
+        while (1) {
+            char chunk[BUFFER_SIZE];
+            ssize_t r = recv(up, chunk, sizeof chunk, 0);
+            if (r <= 0) break;
+            send_all(client_fd, chunk, (size_t)r);
+            if (body_len + (size_t)r < sizeof(body_buf) - 1) {
+                memcpy(body_buf + body_len, chunk, (size_t)r);
+                body_len += (size_t)r;
+            }
+        }
+        close(up);
+
+        if (status == 200 && body_len > 0) {
+            cache_store(req.url, body_buf, body_len);
+        }
+
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                         (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+        log_request(client_ip, req.method, req.url, status, CACHE_STATUS_MISS, latency);
+        return status;
+    }
+
+    http_response_t resp;
+    int status = http_forward(client_fd, &req, extra, extra_len, &resp);
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
+    double latency = (t_end.tv_sec - t_start.tv_sec) * 1000.0 +
+                     (t_end.tv_nsec - t_start.tv_nsec) / 1000000.0;
+    log_request(client_ip, req.method, req.url, status, CACHE_STATUS_NONE, latency);
+    return status;
 }

@@ -5,10 +5,13 @@
 #include <stddef.h>
 
 #define MAX_CACHE_ENTRIES 200
-#define MAX_URL_LEN 512
-#define MAX_CONTENT_LEN 8192
 
-// One "slot" in the cache — think of it as one sticky note with a saved webpage on it
+#ifndef MAX_URL_LEN
+#define MAX_URL_LEN 2048
+#endif
+
+#define MAX_CONTENT_LEN 65536
+
 typedef struct {
     char url[MAX_URL_LEN];
     char content[MAX_CONTENT_LEN];

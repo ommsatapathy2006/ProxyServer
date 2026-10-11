@@ -23,7 +23,6 @@ typedef struct
 static volatile sig_atomic_t shutdown_requested = 0;
 static int listening_fd = -1;
 
-/* Signal handlers should do as little as possible. close() is async-signal-safe. */
 static void handle_shutdown_signal(int signal_number)
 {
     (void)signal_number;
@@ -47,7 +46,6 @@ static void get_client_ip(const struct sockaddr *address,
     }
 }
 
-/* Each thread owns one accepted client socket and closes it when finished. */
 void *server_client_thread(void *argument)
 {
     ClientInfo *client = (ClientInfo *)argument;
@@ -57,7 +55,6 @@ void *server_client_thread(void *argument)
     snprintf(client_ip, sizeof(client_ip), "%s", client->client_ip);
     free(client);
 
-    /* Member B's HTTP/CONNECT handler processes this client connection. */
     (void)handle_http_client(client_fd, client_ip);
 
     close(client_fd);
@@ -166,7 +163,6 @@ int server_start(unsigned short port)
         if (thread_result != 0)
         {
             fprintf(stderr, "pthread_detach: %s\n", strerror(thread_result));
-            /* The thread is already running; do not free its client data here. */
         }
     }
 
